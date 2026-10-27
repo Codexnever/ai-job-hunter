@@ -28,36 +28,58 @@ export async function listJobs(): Promise<Job[]> {
   return response.documents as unknown as Job[];
 }
 
+
 export async function saveJobs(items: Omit<Job, "$id">[]) {
   const { db, databaseId, collectionId } = getDatabase();
-  let saved = 0,
-    skipped = 0;
+  let saved = 0;
+  let skipped = 0;
+  const errors: string[] = [];
 
   for (const item of items) {
+const docId = `j${(await hashUrl(item.url)).slice(0, 35)}`;
     try {
-      // URL is the stable identity; Appwrite document IDs cannot contain arbitrary URLs.
-      const docId = `j${await hashUrl(item.url)}`;
-      try {
-        await db.getDocument(databaseId, collectionId, docId);
+      await db.createDocument(
+  databaseId,
+  collectionId,
+  docId,
+  item
+);
+
+      saved++;
+    } catch (error: unknown) {
+      const err = error as {
+        code?: number;
+        message?: string;
+        type?: string;
+      };
+
+      // Appwrite 409 means this document already exists.
+      if (err.code === 409) {
         skipped++;
-      } catch {
-        await db.createDocument(databaseId, collectionId, docId, item);
-        saved++;
+        continue;
       }
-    } catch (error) {
-      // Avoid silently hiding a configuration/permission issue.
-      if (
-        error instanceof Error &&
-        /permission|unauthorized|collection|database/i.test(error.message)
-      ) {
-        throw error;
-      }
-      skipped++;
+
+      const detail =
+        `URL: ${item.url} | ` +
+        `Code: ${err.code ?? "unknown"} | ` +
+        `Type: ${err.type ?? "unknown"} | ` +
+        `Error: ${err.message ?? "Unknown error"}`;
+
+      errors.push(detail);
+      console.error("[Job save failed]", detail);
     }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Saved ${saved}, skipped ${skipped}, failed ${errors.length}. ` +
+      errors.slice(0, 3).join("\n")
+    );
   }
 
   return { saved, skipped };
 }
+
 
 async function hashUrl(value: string) {
   const bytes = new TextEncoder().encode(value);
